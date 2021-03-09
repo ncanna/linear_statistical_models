@@ -1,0 +1,207 @@
+---
+title: "Real Estate Analysis" 
+author: "Navya Annapareddy"
+fontsize: 12pt
+geometry: margin=1in
+urlcolor: black
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, highlight=FALSE)
+#library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+require(dplyr) 
+library(ade4)
+library(lattice) 
+library("GGally")
+library(MASS)
+library(lindia)
+```
+
+```{r}
+house = read.csv("~/Desktop/Fall 2020/SYS4021/Source/housing.csv",sep=',',header=T)
+head(house)
+```
+
+```{r}
+boxplot(house$price, plot=FALSE)$out
+
+```
+
+```{r}
+boxplot(house$price, plot=FALSE)$stats[5]
+```
+
+```{r}
+ggplot(df, aes(x="", y=price)) + 
+  geom_boxplot(width=0.6) +
+  stat_summary(
+    aes(label=sprintf("%1.1f", ..y..)),
+    geom="text", 
+    fun.y = function(y) boxplot.stats(y)$stats,
+    position=position_nudge(x=0.33), 
+    size=3.5) +
+  theme_bw()
+```
+
+```{r include=FALSE}
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- round(abs(cor(x, y, use = "complete.obs")), 2)
+    txt <- format(c(r, 0.123456789), digits=digits)[1]
+    txt <- paste(prefix, txt, sep="")
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = 2)
+}
+
+panel.hist <- function(x, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(usr[1:2], 0, 1.5) )
+    h <- hist(x, plot = FALSE)
+    breaks <- h$breaks; nB <- length(breaks)
+    y <- h$counts; y <- y/max(y)
+    rect(breaks[-nB], 0, breaks[-1], y,
+    col="steelblue2", ...)
+}
+
+
+uva.pairs <- function(vars, ...)
+{
+	args <- list(...)
+	
+	if(is.matrix(vars) | is.data.frame(vars)){
+		if(is.null(args$labels))pairs(vars, lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main)
+		else(pairs(vars, lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main, labels = args$labels))
+		}
+	else(if(is.character(vars)){
+		if(is.null(args$labels))pairs(formula(vars), lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main, data = args$data)
+		else(pairs(formula(vars), lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main, data = args$data, labels = args$labels))} 
+	else(cat("You must enter a matrix, dataframe or formula")))
+	}
+```
+
+```{r}
+uva.pairs(house[,c("price", "sqft", "bedrooms", "baths")])
+```
+
+```{r}
+ggplot(house, aes(x=City, y=price)) + geom_point()
+```
+
+```{r}
+house.main <-lm(price~sqft+bedrooms+baths,data=house)
+summary(house.main)
+```
+
+0.0000000006526 < 0.01
+
+For every one unit increase in  the predicted value of  increases by the value of the slope. 
+
+```{r}
+house.inter <-lm(price~(sqft + bedrooms + baths)^2,data=house)
+summary(house.inter)
+```
+
+```{r}
+anova(house.main,house.inter)
+```
+
+p > 0.05
+Do not significantly effect 
+Therefore reduce complexity and choose smaller
+
+```{r}
+anova(house.inter, house.main)
+```
+
+```{r}
+AIC(house.main)
+#Adjusted r^2 = 0.416
+AIC(house.inter)
+#Adjusted r^2 = 0.4089
+```
+
+Choose smaller model based on
+- F test p > 0.05
+- Smaller AIC
+- Larger R^2
+
+Choose larger model based on
+- None
+
+```{r}
+gg_cooksd(house.main, label = TRUE, show.threshold = TRUE,
+          threshold = "convention") +
+  xlab("Obs. Number")+ylab("Cook's distance") +
+  ggtitle("Cook's distance plot")+
+  theme(plot.title = element_text(hjust = 0.5), plot.caption = element_text(hjust = 0.5))
+```
+
+```{r}
+plot(house.main,labels.id = NULL, which=4) 
+```
+
+```{r}
+# Residual vs. Fitted
+plot(house.main,which=1) 
+```
+No relationship above/below line = good fit
+Constant variance
+
+```{r}
+plot(house.main,which=2) 
+```
+
+```{r}
+boxcox(house.main) 
+```
+
+#You should see if the confidence interval includes 1 or 0. If it includes 1, you don't need a transformation. If it includes 0, you should use a log transformation. If it includes neither, use the optimal lambda. 
+
+```{r}
+boxcox(house.main, plotit = F)$x[which.max(boxcox(house.main, plotit = F)$y)] 
+```
+
+```{r}
+City_fact <- as.factor(df$City)
+contrasts(City_fact)
+```
+
+```{r}
+length(unique(df$City))
+```
+
+```{r}
+pca_df <- df[,c("price", "sqft", "bedrooms", "baths")]
+pca_df.corr <- princomp(pca_df, cor=T)
+
+barplot(pca_df.corr$loadings[,1], main='PC1 Loadings with Correlation Matrix')
+```
+
+```{r}
+names(df)
+```
+
+```{r}
+cumplot <- function(pca.obj, ...)
+{
+  xc <- cumsum(pca.obj$sdev^2)/sum(pca.obj$sdev^2)
+  barplot(xc, ylim = c(0,1), main = "Proportion of Variance", ylab = "Proportion", names.arg = 1:length(pca.obj$sdev), xlab = "Components", ...)
+  xc <- as.data.frame(xc)
+  setDT(xc, keep.rownames=TRUE)[]
+  names(xc)[names(xc) == "rn"] <- "Component"
+  names(xc)[names(xc) == "xc"] <- "Proportion"
+  return(xc)
+}
+
+cumplot(pca_df.corr, col = "grey")
+```
+
+```{r}
+biplot(pca_df.corr, main="Biplot")
+```

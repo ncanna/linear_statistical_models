@@ -1,0 +1,615 @@
+---
+title: "Modeling and Simulating Univariate Time Series"
+date: "12/4/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require("knitr")
+#sourcedir <- "C:/Users/student/Documents/THIRD YEAR - Fall 2020/SYS 4021 - Linear Statistical Models/SYS4021_Source"
+#datadir <- "C:/Users/student/Documents/THIRD YEAR - Fall 2020/SYS 4021 - Linear Statistical Models/SYS4021_Data/AirQualityUCIData"
+sourcedir <-"/Users/navya/Desktop/Fall 2020 Classes/SYS4021/Source"
+datadir <- "/Users/navya/Desktop/Fall 2020 Classes/SYS4021/Data/AirQualityUCIData"
+opts_knit$set(root.dir = sourcedir)
+
+##Load libraries 
+library(forecast)
+library(ggplot2)
+library(mtsdi)
+library(tidyverse)
+library(lubridate)
+library("car")
+library(ggfortify)
+library(ggpubr)
+library(tseries)
+library(imputeTS)
+```
+
+# Load data and impute missing values
+```{r cars, message=FALSE, warning=FALSE}
+setwd(datadir)
+
+airquality = read.csv('AirQualityUCI.csv')
+
+# replace -200 with NA
+airquality[airquality == -200] <- NA
+
+# convert integer type to numeric
+intcols = c(4,5,7,8,9,10,11,12)
+for(i in 1:length(intcols)){
+  airquality[,intcols[i]] <- as.numeric(airquality[,intcols[i]])
+}
+
+setwd(sourcedir)
+
+# create new data frame with just NO2 and impute missing values
+AQdata = airquality["NO2.GT."]
+AQdata = na_interpolation(AQdata)
+
+# aggregate to daily maxima for model building
+dailyAQ <- aggregate(AQdata, by=list(as.Date(airquality[,1],"%m/%d/%Y")), FUN=max)
+
+# create time series of NO2
+NO2.ts <- ts(dailyAQ[,2])
+
+# remove last 7 days
+NO2 <- NO2.ts[1:384]
+NO2 <- ts(NO2)
+```
+
+## Visualize the Time Series Data
+
+#### Plot of Time Series Data
+```{r}
+autoplot(NO2,ylab="NO2 Concentration (microg/m^3)",xlab="Day")
+```
+First, we visualized the time series data. Based on this visualization, there appears to be an upward trend in NO2 concentrations over time (this trend should be accounted for by using time as a predictor in the future model, if time is determined to be significant).
+
+#### Create a Periodogram to Identify Seasonal Components 
+
+We then created a periodogram for the data set (minus the last 7 days) to identify potential seasonal components of the time series. 
+
+```{r}
+# Get the periodogram for NO2.ts.short
+pg.NO2 <- spec.pgram(NO2,spans=9,demean=T,log='no', plot=FALSE)
+spec.NO2 <- data.frame(freq=pg.NO2$freq, spec=pg.NO2$spec)
+ggplot(spec.NO2) + geom_line(aes(x=freq,y=spec)) + 
+  ggtitle("Smooth Periodogram of NO2 Concentrations")
+```
+Based on the graph of the periodogram, there appears to be significant red noise in the data, corresponding to the low frequencies (high periods). It is common for data with high autocorrelation to exhibit this behavior, which we modeled using autoregressive terms later. However, there also appear to be two smaller peaks in the data, which we investigated further below. 
+
+```{r}
+# Find the peak, max.omega.NO2
+max.omega.NO2<-pg.NO2$freq[which(pg.NO2$spec==max(pg.NO2$spec))]
+
+# Where is the peak?
+paste("Peak: ", max.omega.NO2)
+
+# What is the period?
+paste("Period: ", 1/max.omega.NO2)
+
+# What are the periods of the next biggest peaks?
+# Sort spectrum from largest to smallest and find index
+sorted.spec <- sort(pg.NO2$spec, decreasing=T, index.return=T)
+
+# Corresponding periods (omegas = frequencies, Ts = periods)
+sorted.omegas <- pg.NO2$freq[sorted.spec$ix]
+sorted.Ts <- 1/pg.NO2$freq[sorted.spec$ix]
+
+# Look at first 25
+paste("First 25 frequencies (omegas): ")
+sorted.omegas[1:25]
+paste("First 25 periods (Ts): ")
+sorted.Ts[1:25]
+```
+Based on the periods, the highest peaks occur at the lowest frequency. 192 is half the length of the time series data, and 384 is the length of the data set. This appears to be the red noise discussed earlier. However, later on we see periods between about 6.62-7.38, at frequencies between approximately .135-.15. These frequencies and periods suggest that there is a weekly season (~7 days) in the NO2 concentration data.
+
+#### Discovering and Modeling Seasonal and Trend Components 
+
+First, we created a t variable for the time sequence to use when modeling the trend and seasonality. Then we built a model using just time as a predictor. 
+```{r}
+t<-c(1:(length(NO2)))
+
+#Build a new model 
+NO2.trend<-lm(NO2~t)
+
+##use the summary() command. Is time significant? --- Yes
+summary(NO2.trend)
+```
+Based on the NO2.trend model, it appears that time is a significant predictor and should likely be included in the model. 
+
+Below, we plotted the trend line (in red):
+
+```{r message=FALSE, warning=FALSE}
+#Plot the trend line for NO2.ts
+invisible(plot(NO2) + abline(NO2.trend,col='red') + title("Daily Maximum NO2 Concentratioon"))
+```
+Next, we built a model that only controls for seasonality: 
+```{r}
+NO2.seasonal <- lm(NO2 ~ sin(2*pi*t/7) + cos(2*pi*t/7))
+summary(NO2.seasonal)
+```
+Just the seasonal model was significant at p < .05, but it appears that only the sine term for seasonality is statistically significant. However, both sine and cosine terms should remain in the model. 
+
+Next, we created a model to account for both the seasonality and apparent upward trend in the data. This model uses T=7 for the seasonal period, as identified using the periodogram. 
+```{r}
+# Trend + Seasonal Model 
+# 7 is used for the period in the sine/cosine terms 
+NO2.trend.seasonal <- lm(NO2 ~ t + sin(2*pi*t/7) + cos(2*pi*t/7))
+summary(NO2.trend.seasonal)
+```
+The trend+seasonal model was significant at p = 2.2e-16, with both time (t) and the sine term for seasonality being significant at p < .05. The cosine term for seasonality was significant at p < .1. 
+
+We plotted the trend+seasonal model fitted values against the actual data values. From this plot, it was clear that there was still information that needed to be accounted for in the residuals using AR/MA terms. 
+
+```{r}
+ggplot(dailyAQ[1:(length(NO2)), c('Group.1', 'NO2.GT.')], aes(x=Group.1,y=NO2.GT.)) + geom_line() + 
+  geom_line(aes(x=Group.1,y=NO2.trend.seasonal$fitted.values),color="red") +
+  xlab("") + ylab("NO2 Concentration")
+```
+Based on the original diagnostics of the trend+seasonal model, it looks like there is non-constant variance and the mean is not quite 0. However, based on the QQ plot the model residuals appear to be mostly Gaussian. 
+```{r, warning=FALSE}
+autoplot(NO2.trend.seasonal, labels.id = NULL)
+```
+Next, we got the residuals from the trend+seasonal model and stored them in e.ts.NO2. There were still patterns in the residuals to be modeled. 
+
+```{r}
+# Get the residuals from the NO2.trend.seasonal model above and store in e.ts.NO2:
+e.ts.NO2 <- ts(NO2.trend.seasonal$residuals)
+
+# Plot the residuals for the temp.trend model
+autoplot(e.ts.NO2)
+```
+
+#### Plot the ACF and PACF of the Trend+Seasonal Model Residuals 
+```{r}
+NO2.acf <- ggAcf(e.ts.NO2)
+NO2.pacf <- ggPacf(e.ts.NO2)
+ggarrange(NO2.acf, NO2.pacf, nrow = 2, ncol=1)
+```
+The ACF of the residuals demonstrated sinusoidal decay, suggesting the need for autoregressive (AR) terms in an ARIMA model. The PACF appears to cut off after lag 3, and significantly drops after lag 1. So we opted to try an AR(1) and AR(3) model. The ACF does not appear to cut off significantly until around lag 11, but we thought that having 11 MA terms would be too many and would overfit. So we decided to try models that had 2, 3, and 5 moving average terms. 
+
+We also examined the effect of taking the first order differences of our residuals. It appears that differencing produces quicker decay in residual significance for the ACF, so we decided that trying a model with one order of difference taken would be beneficial. 
+```{r}
+# Do we need to consider a first order difference?
+NO2.diff.acf <- ggAcf(diff(e.ts.NO2))
+NO2.diff.pacf <- ggPacf(diff(e.ts.NO2))
+ggarrange(NO2.diff.acf,NO2.diff.pacf,nrow=2,ncol=1)
+```
+
+## Alternative Models Created for the Residuals of the Trend+Seasonal Model
+
+Below, we tried eight (8) different models with different AR, MA, and AR+MA terms, as well as a model with differencing. 
+
+### Option 1: ARIMA(1,0,0) model
+```{r}
+# ar(1) p = 1, q = 0
+NO2.ar1 <- arima(e.ts.NO2, order=c(1,0,0), include.mean=FALSE)
+summary(NO2.ar1)
+```
+```{r}
+ggAcf(NO2.ar1$residuals)
+```
+```{r}
+ggPacf(NO2.ar1$residuals)
+```
+Based on the ACF and PACF of the AR(1) model, there were still significant peaks after lag 10, which suggested that there were still patterns that needed to be accounted for in the residuals. 
+
+### Option 2: ARIMA(0, 0, 2) model 
+```{r}
+# ma(2) p=0, q=2
+NO2.ma2 <- arima(e.ts.NO2, order=c(0,0,2), include.mean=FALSE)
+summary(NO2.ma2)
+```
+```{r}
+ggAcf(NO2.ma2$residuals)
+```
+The ACF of the MA(2) model indicated a poor fit to the residuals, as there were fairly significant lags until lag 14.
+
+### Option 3: ARIMA(1, 0, 2) Model
+```{r}
+# arma(1,2) p=1, q=2
+NO2.arma12 <- arima(e.ts.NO2, order=c(1,0,2), include.mean=FALSE)
+summary(NO2.arma12)
+```
+```{r}
+ggAcf(NO2.arma12$residuals)
+```
+The ARMA(1, 2) model had a better ACF, but there were still fairly significant lags after lag 11. 
+
+### Option 4: ARIMA(3, 0, 0)
+```{r}
+# ar(3) p=3                       
+NO2.ar3 <- arima(e.ts.NO2, order=c(3,0,0), include.mean=FALSE) 
+summary(NO2.ar3)
+```
+
+```{r}
+ggAcf(NO2.ar3$residuals)
+```
+
+```{r}
+ggPacf(NO2.ar3$residuals)
+```
+The AR(3) model had fewer significant lags in the ACF and the PACF was better than the previous models tried, suggesting that 3 autoregressive terms might account for a significant amount of the pattern.  
+
+### Option 5: ARIMA(2, 0, 3) Model
+```{r}
+# arima(2, 0, 3 ) p=2, d = 0, q = 3
+NO2.arima203 <- arima(e.ts.NO2, order=c(2, 0, 3), include.mean=FALSE) 
+summary(NO2.arima203)
+```
+
+```{r}
+ggAcf(NO2.arima203$residuals)
+```
+
+```{r}
+ggPacf(NO2.arima203$residuals)
+```
+The ACF for the ARIMA(2, 0, 3) model had more significant lags than the model with just 3 AR terms.
+
+### Option 6: ARIMA(1, 0, 5)
+```{r}
+# arma(1, 0, 5) p=1, q = 5  
+NO2.arma105 <- arima(e.ts.NO2, order=c(1,0,5), include.mean=FALSE) 
+summary(NO2.arma105)
+```
+
+```{r}
+ggAcf(NO2.arma105$residuals)
+```
+
+```{r}
+ggPacf(NO2.arma105$residuals)
+```
+The ARMA(1, 0, 5) model ACF and PACF did not exhibit significant lags until lag 11, but did not seem much better than the ARMA(2, 0, 3) model. 
+
+# Option 7: ARIMA(3, 1, 3)
+```{r}
+# arima(3, 1, 3) p=3, d = 1, q = 3
+NO2.arima313 <- arima(e.ts.NO2, order=c(3,1,3), include.mean=FALSE) 
+summary(NO2.arima313)
+```
+
+```{r}
+ggAcf(NO2.arima313$residuals)
+```
+
+```{r}
+ggPacf(NO2.arima313$residuals)
+```
+The ARIMA(3, 1, 3) model, based on the ACF, appeared to handle most significant patterns in the residuals, only having two significant lags later on. The PACF exhibited no extremely significant lags. 
+
+
+### Option 8: Auto model generated from auto.arima
+```{r}
+# NO2.auto model generated using auto.arima
+NO2.auto <- auto.arima(e.ts.NO2,approximation=FALSE) 
+summary(NO2.auto)
+```
+
+```{r}
+ggAcf(NO2.auto$residuals)
+```
+
+```{r}
+ggPacf(NO2.auto$residuals)
+```
+
+## Assessing the Alternative Models Using Diagnostics 
+#### Residuals vs. Fitted Plots for the Eight Alternative Models 
+```{r, warning = FALSE, message=FALSE, fig.width=10, fig.height=7}
+# assess residuals vs. fitted
+model1 = ggplot() + geom_point(aes(x=fitted(NO2.ar1), y=NO2.ar1$residuals)) + ggtitle("AR1")
+model2 = ggplot() + geom_point(aes(x=fitted(NO2.ma2), y=NO2.ma2$residuals)) + ggtitle("MA2")
+model3 = ggplot() + geom_point(aes(x=fitted(NO2.arma12), y=NO2.arma12$residuals)) + ggtitle("ARMA12")
+model4 = ggplot() + geom_point(aes(x=fitted(NO2.ar3), y=NO2.ar3$residuals)) + ggtitle("AR3")
+model5 = ggplot() + geom_point(aes(x=fitted(NO2.arma105), y=NO2.arma105$residuals)) + ggtitle("ARMA105")
+model6 = ggplot() + geom_point(aes(x=fitted(NO2.arima203), y=NO2.arima203$residuals)) + ggtitle("ARIMA203")
+model7 = ggplot() + geom_point(aes(x=fitted(NO2.arima313), y=NO2.arima313$residuals)) + ggtitle("ARIMA313")
+model8 = ggplot() + geom_point(aes(x=fitted(NO2.auto), y=NO2.auto$residuals)) + ggtitle("Auto")
+
+ggarrange(model1, model2, model3, model4, model5, model6, model7, model8, ncol=2, nrow=4)
+```
+First, we evaluated the Residuals vs. Fitted Plots for the eight different models. All of the residuals vs. fitted graphs for the different models appeared fairly similar. There does not appear to be any distinct pattern in any of the residual plots, which suggests that the models for the residuals exhibit homoscedasticity. 
+
+#### QQ-Plots Plots for the Eight Alternative Models 
+
+```{r, warning = FALSE, message=FALSE, fig.width=10, fig.height=7}
+# assess normality of residuals
+model1 = qplot(sample=NO2.ar1$residuals) + stat_qq_line(color="red") + ggtitle("AR1")
+model2 = qplot(sample=NO2.ma2$residuals) + stat_qq_line(color="red") + ggtitle("MA2")
+model3 = qplot(sample=NO2.arma12$residuals) + stat_qq_line(color="red") + ggtitle("ARMA12")
+model4 = qplot(sample=NO2.ar3$residuals) + stat_qq_line(color="red") + ggtitle("AR3")
+model5 = qplot(sample=NO2.arma105$residuals) + stat_qq_line(color="red") + ggtitle("ARMA105")
+model6 = qplot(sample=NO2.arima203$residuals) + stat_qq_line(color="red") + ggtitle("ARIMA203")
+model7 = qplot(sample=NO2.arima313$residuals) + stat_qq_line(color="red") + ggtitle("ARIMA313")
+model8 = qplot(sample=NO2.auto$residuals) + stat_qq_line(color="red") + ggtitle("Auto")
+
+ggarrange(model1, model2, model3, model4, model5, model6, model7, model8, ncol=2, nrow=4)
+```
+Based on the QQ Plots, all eight models appear to have about equally Gaussian residuals. All models display some non-Gaussianity in the right-hand tail. 
+
+One problem that remains in the chosen ARIMA(3,1,3) model is the lack of Gassianity in the right-hand tail. 
+
+#### Ljung-Box Diagnostic for the Eight Alternative Models 
+
+Following the Residuals vs. Fitted and QQ Plot evaluations, we performed the Ljung-Box test to check for independence. 
+
+*AR1 Model* 
+```{r, message=FALSE}
+# Plot diagnostics for independence of residuals using tsdiag()
+ggtsdiag(NO2.ar1,gof.lag=20)
+opt1.nlags <- 2
+```
+For AR(1), the model is only adequate for 2 lags, after which the autocorrelation is significant (lack of independence) and the model is no longer adequate. Even then, the p-value for the first two lags is not that high.
+
+*MA2 Model* 
+```{r}
+ggtsdiag(NO2.ma2,gof.lag=20)
+opt2.nlags <- 1
+```
+The MA(2) model performed worse than the AR(1) model and was only adequate for 1 lag. 
+
+*ARMA12 Model* 
+```{r}
+ggtsdiag(NO2.arma12,gof.lag=20)
+opt3.nlags <- 10
+```
+The ARMA(1, 2) model performed much better, and was adequate for up to the 10th lag. The first two lags have higher p-values, which suggests that model performs very well (accept H0), but the p-values get lower after lag 2 suggesting the model does not perform as well at later lags. 
+
+*AR3 Model* 
+```{r}
+ggtsdiag(NO2.ar3,gof.lag=20) # up to 11 lags, points are lower - not as good 
+opt4.nlags <- 11
+```
+The AR(3) model performed better than the ARMA(1, 2) model, as the p-values were significantly higher for more lags. However, on the 11th lag, while the model was adequate, it was just barely so. 
+
+
+*ARMA105 Model* 
+```{r}
+ggtsdiag(NO2.arma105,gof.lag=20) # up to 20 lags, the points are lower - not as good 
+opt5.nlags <- 20
+```
+The ARMA(1, 0, 5) model performed better than all previous models and was adequate until lag 20. The p-values were quite high up until lag 11, suggesting the independence condition was very satisfied. However, after lag 11 the p-values dropped significantly. 
+
+
+*ARIMA203 Model* 
+```{r}
+ggtsdiag(NO2.arima203,gof.lag=20) # 11 lags, lower points - not as good
+opt6.nlags <- 11
+```
+THe ARIMA(2, 0, 3) model performed worse than the ARMA(1, 0, 5) model because it had the highest p-values up until lag 4, after which they dropped significantly, suggesting less strength in the independence assumption. At lag 11, the model was just barely adequate. 
+
+*ARIMA313 Model* 
+```{r}
+ggtsdiag(NO2.arima313,gof.lag=20) # 20 lags, points are higher 
+opt7.nlags <- 20
+```
+The ARIMA(3, 1, 3) model performed very well. It exhibited high p-values > .5 up until lag 11, with very high p-values until lag 7. Importantly, the p-values at the later lags (lags 12-20) exhibited the highest p-values of all of the models, which suggested that this model best satisfied the independence condition for the residuals. This model was deemed to be the best model of all those tested based on the Ljung-Box test for independence, and it is used later for simulation. 
+
+There do not appear to be any remaining problems with this model based on the Ljung-Box diagnostic. 
+
+*Auto Model* 
+```{r}
+ggtsdiag(NO2.auto, gof.lag=20) # until 11 lags, points much lower - not as good 
+opt8.nlags <- 11
+```
+Finally, the auto.arima model ARIMA(2, 0, 2) performed about the same as the ARIMA(2, 0, 3) model tested. 
+
+##### Metric Assessments Using AIC and BIC
+```{r}
+# Using AIC
+
+#Get AIC and BIC
+opt1.aic <- AIC(NO2.ar1) 
+opt2.aic <- AIC(NO2.ma2)
+opt3.aic <- AIC(NO2.arma12)
+opt4.aic <- AIC(NO2.ar3) 
+opt5.aic <- AIC(NO2.arma105) 
+opt6.aic <- AIC(NO2.arima203) 
+opt7.aic <- AIC(NO2.arima313) 
+opt8.aic <- AIC(NO2.auto)
+```
+
+```{r}
+# Using BIC
+opt1.bic <- BIC(NO2.ar1)
+opt2.bic <- BIC(NO2.ma2)
+opt3.bic <- BIC(NO2.arma12)
+opt4.bic <- BIC(NO2.ar3) 
+opt5.bic <- BIC(NO2.arma105) 
+opt6.bic <- BIC(NO2.arima203) 
+opt7.bic <- BIC(NO2.arima313) 
+opt8.bic <- BIC(NO2.auto) 
+```
+
+```{r}
+models.data <- data.frame('Model'=c('AR1', 'MA2', 'ARMA12', 'AR3', 'ARMA105', 'ARIMA203', 'ARIMA313', 'Auto'),
+                          'AIC'=c(opt1.aic, opt2.aic, opt3.aic, opt4.aic, opt5.aic, opt6.aic, opt7.aic, opt8.aic),
+                          'BIC'=c(opt1.bic, opt2.bic, opt3.bic, opt4.bic, opt5.bic, opt6.bic, opt7.bic, opt8.bic),
+                          'Lags'=c(opt1.nlags, opt2.nlags, opt3.nlags, opt4.nlags, opt5.nlags, opt6.nlags, opt7.nlags, opt8.nlags))
+
+models.data <- models.data[order(models.data$AIC),]
+models.data
+```
+We provide a metric comparison table above for the eight models tested. Based on the AIC metric, the ARIMA(3, 1, 3) model is the best performing model tested, with an AIC=3747.453. The ARIMA(3, 1, 3) was also adequate for up to 20 lags. 
+
+However, if we were to use the BIC metric, the best performing model is the AR(3) model with a BIC=3771.045. 
+
+**We chose to use the ARIMA(3,1,3) model for forecasting and simulation based on the fact that that model had the lowest AIC value, was adequate up to 20 lags, seemed to address almost all of the variability/patterns in the residuals based on the ACF and PACF (plotted below), and exhibited fairly Gaussian residuals and good fit in the residuals vs. fitted plot.** 
+
+### Examine Residuals of Best Model based on AIC and number of lags ARIMA(3, 1, 3)
+
+```{r}
+# Plot the autocorrelation (ACF) and partial autocorrelation (PACF) of the residuals of NO2.arima313
+NO2.arima313.resid.acf <- ggAcf(NO2.arima313$residuals)
+NO2.arima313.resid.pacf <- ggPacf(NO2.arima313$residuals)
+ggarrange(NO2.arima313.resid.acf,NO2.arima313.resid.pacf,nrow=2,ncol=1)
+```
+
+### Graph the fitted values of the trend+season model + the ARIMA model for the residuals
+
+We plotted the fitted values of the trend+season model and the ARIMA(3, 1, 3) model for the residuals in red. The original observations are in black. 
+```{r}
+NO2.fitted <- NO2.trend.seasonal$fitted.values + fitted(NO2.arima313)
+
+ggplot(dailyAQ[1:(length(NO2)), c('Group.1', 'NO2.GT.')], aes(x=Group.1,y=NO2.GT.)) + geom_line() + 
+  geom_line(aes(x=Group.1,y=NO2.fitted),color="red") +
+  xlab("") + ylab("NO2 Concentration") + labs(title="Fitted values of the trend+season model + the ARIMA model for the residuals")
+```
+
+### Forecast Next 7 Days Using the Best Model
+
+Next, using our trend+season model and ARIMA(3,1,3) model for the residuals, we generated a forecast for the NO2 concentrations for the next 7 days. 
+
+```{r}
+# The test period in days 
+next.7day.time <- c((length(NO2.ts)-6):(length(NO2.ts)))
+
+# The test data frame
+next.7day <- data.frame(t = next.7day.time, act.NO2 = NO2.ts[next.7day.time])
+
+# The actual time series for the test period
+next.7day.ts <- NO2.ts[next.7day.time]
+
+next.7day.ts <- ts(next.7day$act.NO2)
+
+# Prediction for the next 7 days by NO2.arima313
+E_Y.pred <- predict(NO2.trend.seasonal, newdata=next.7day)
+e_t.pred <- forecast(NO2.arima313, h=7)
+next.7day.prediction <- E_Y.pred + e_t.pred$mean
+
+# MSE:
+paste("MSE of 7 Day Forecast using trend+seasonal and ARIMA(3, 1, 3): ", mean((next.7day.prediction-next.7day$act.NO2)^2))
+```
+The MSE of the 7 day forecast was 765.69.
+
+#### Visualizing the Forecast: Forecast vs. True Values 
+```{r}
+plot(ts(next.7day$act.NO2),type='o', ylim = c(50, 300), ylab = 'NO2 Concentration')
+lines(ts(next.7day.prediction),col='red',type='o')
+lines(1:7, E_Y.pred + e_t.pred$lower[,2], col = "red", lty = "dashed")
+lines(1:7, E_Y.pred + e_t.pred$upper[,2], col = "red", lty = "dashed")
+legend(1,100, legend = c("Actual", "Predicted"), lwd = 2, col = c("black", "red")) 
+title("Temp Trend + Seasonal Model + ARIMA of Residuals")
+```
+When we visualized the forecast, it appears that the predicted values for the next seven days follow fairly closely with the actual observed values, except for days 3 and 4 where the model appears to over-predict by a decent amount. Our predictions do fall within the 95% confidence interval for the prediction (indicated by the dashed red lines). 
+
+## Simulating Univariate Time Series Models 
+#### Creating the Simulated Points
+
+```{r}
+# set the seed 
+set.seed(1)
+
+# Get a linear model of monthly trend and seasonality
+time.NO2 <- c(1:(length(NO2.ts)))
+temp.trend.seasonal<-lm(NO2.ts[time.NO2]~time.NO2 + sin(2*pi*time.NO2/7) + cos(2*pi*time.NO2/7))
+
+# Simulate 1 year of daily max NO2 with the best ARIMA(3,1,3) model
+auto.sim <- arima.sim(n=1*364, list(order = c(3,1,3), ar=c(NO2.arima313$coef[1],NO2.arima313$coef[2],NO2.arima313$coef[3]),
+                                      ma=c(NO2.arima313$coef[4], NO2.arima313$coef[5], NO2.arima313$coef[6])),
+                        sd=sqrt(NO2.arima313$sigma2))
+
+# Add mean predictions and plot simulation 
+next.yr.time <- c(1:(1*365))
+next.yr <- data.frame(time.NO2 = next.yr.time)
+next.yr.predictions <- predict(temp.trend.seasonal, newdata=next.yr)
+simulated.ts <- ts(next.yr.predictions + auto.sim)
+
+# Get trend
+t<-c(1:(length(simulated.ts)))
+sim.trend<-lm(simulated.ts~t)
+
+# Plot simulated concentrations 
+invisible(plot(simulated.ts) + abline(sim.trend,col='red') + title("Simulated Maximum NO2 Concentration"))
+```
+### Visually Compare Observed and Simulated Plots 
+```{r, fig.width=5, fig.height=2}
+par(mfrow=c(1,2))
+invisible(plot(NO2) + abline(NO2.trend,col='red') + title("Observed Maximum NO2"))
+invisible(plot(simulated.ts) + abline(sim.trend,col='red') + title("Simulated Maximum NO2"))
+```
+The simulated values visually reproduce the appearance of the observed time series fairly closely. The simulated points appear to be generally higher than the observed points, which is consistent with what was observed when forecasting (the model tended to over-estimate the NO2 concentrations). Additionally, at the beginning of the time series, the simulated points appear to have a more pronounced rise and fall between time=0 and time=100, compared to the observed values which are flatter in that range. 
+
+The simulated points follow the general upward trend of the observations with similar peak patterns. Just as the trend line of the observations is increasing over time, the simulated values also increase over time (though the trend line for the simulated points is steeper than the trend line for the observed points). 
+
+### Compare Observed and Simulated Trends 
+#### Linear Model of Trend + Seasonality for Observed Points
+```{r}
+observation.ts <- NO2.ts
+
+# Create a new variable which contains the index of the days 
+time.obs <- c(1:(length(observation.ts)))
+
+# Get a linear model of trend and seasonality
+trend.seasonal.obs <- lm(observation.ts[time.obs]~time.obs + sin(2*pi*time.obs/7) + cos(2*pi*time.obs/7))
+
+coef.obs <- summary(trend.seasonal.obs)$coefficients[2]
+paste("Coefficient on Time for Observed Points:", coef.obs)
+
+# Create a new variable which contains the index of the days 
+time.sim <- c(1:(length(simulated.ts)))
+
+# Get a linear model of trend and seasonality
+trend.seasonal.sim <- lm(simulated.ts[time.sim]~time.sim + sin(2*pi*time.sim/7) + cos(2*pi*time.sim/7))
+coef.sim <- summary(trend.seasonal.sim)$coefficients[2]
+
+paste("Coefficient on Time for Simulated Points:", coef.sim)
+```
+```{r}
+percent_diff <- abs((coef.sim-coef.obs)/((coef.obs+coef.sim)/2)) * 100
+paste("Percent Difference of Coefficient on Time for Simulated and Observed Points:", percent_diff, "%")
+```
+The coefficient on time for the simulated points is .37 and for the observed it is .25, so the trend is more pronounced in the simulated points than in the actual observations. The coefficient on time for the simulated points is ~38.8% higher than the coefficient on time for the observed values. 
+
+### Compare Observed and Simulated Seasonality 
+#### Periodogram for Observed Points
+```{r}
+pg.obs <- spec.pgram(observation.ts,spans=9,demean=T,log='no', plot=FALSE)
+spec.obs <- data.frame(freq=pg.obs$freq, spec=pg.obs$spec)
+ggplot(spec.obs) + geom_line(aes(x=freq,y=spec)) + 
+  ggtitle("Smooth Periodogram of Observed NO2 Concentrations")
+```
+
+#### Periodogram for Simulated Points
+```{r}
+pg.sim <- spec.pgram(simulated.ts,spans=9,demean=T,log='no', plot=FALSE)
+spec.sim <- data.frame(freq=pg.sim$freq, spec=pg.sim$spec)
+ggplot(spec.sim) + geom_line(aes(x=freq,y=spec)) + 
+  ggtitle("Smooth Periodogram of Simulated NO2 Concentrations")
+```
+Both the simulated and observed periodograms have a large peak around freq=0 (likely red noise). However, the squared amplitude for the simulated NO2 concentrations at the low frequencies is lower (around 15000) than the squared amplitude for the observed points at the same frequency which is around 24,000. Importantly, both periodograms display a peak in the frequency range between ~.13-.15, which corresponds to **weekly seasonality**. Additionally, after a frequency of about .2, both periodograms show no more noticeable/large peaks. **These visual observations suggests that the data simulated from the model was able to reproduce the seasonality of the observed NO2 concentrations data fairly closely.** Interestingly, the simulated periodogram has another more pronounced peak around freq=.6, which does not appear in the periodogram for the observed data. This could be due to noise in the simulated data or some variability that is not accounted for in the model. 
+
+### Compare Reproduce Observed Mean and Variance of Observed and Simulated Time Series
+#### Observed Mean and Variance for Observed Points
+```{r}
+obs_mean <- mean(observation.ts)
+obs_var <- var(observation.ts)
+paste("The Observed Points Have a Mean of:", obs_mean, " and a variance of ", obs_var)
+
+sim_mean <- mean(simulated.ts)
+sim_var <- var(simulated.ts)
+paste("The Simulated Points Have a Mean of:", sim_mean, " and a variance of ", sim_var)
+
+percent_diff_mean <- abs((sim_mean-obs_mean)/((sim_mean+obs_mean)/2)) * 100
+paste("Percent Difference of Observed Mean of Observed and Simulated Points:", percent_diff_mean, "%")
+
+percent_diff_var <- abs((sim_var-obs_var)/((sim_var+obs_var)/2)) * 100
+paste("Percent Difference of Variance of Observed and Simulated Points:", percent_diff_var, "%")
+```
+The observed points have a mean of 163.9 and a variance of 2726.104, while the simulated points have a mean of 211.7 and a variance of 3259.12. The mean of the simulated points is about 25.5% higher than the observed points, which is consistent with other observations that have shown the model tends to over-predict the NO2 concentration values. It also follows then that the variance of the simulated points is higher (by about 17.8%) than the variance for the observed points. **Thus, it seems that the model was able to reproduce the mean and variance fairly well, but in general the model overestimates the NO2 concentration values.**
+
+### Compare Autocorrelation of Observed and Simulated Time Series
+```{r}
+obs.acf <- ggAcf(observation.ts)
+obs.pacf <- ggPacf(observation.ts)
+sim.acf <- ggAcf(simulated.ts)
+sim.pacf <- ggPacf(simulated.ts)
+ggarrange(obs.acf, obs.pacf, sim.acf, sim.pacf, nrow = 2, ncol=2)
+```
+The ACF of the observation time series for the concentrations exhibits gradual sinusoidal decay and has significant lags up until at least lag 25. It appears that the model simulation was able to reproduce the autocorrelation behavior very well because the ACF of the simulated data exhibits similar sinusoidal decay and has significant lags up until at least lag 25. It should be noted that the decay in the ACF for the simulated points is not as pronounced as the decay for the ACF of the observed points. Additionally, the simulated ACF autocorrelation values are slightly higher than the autocorrelation values for the observed ACF (but this may be due to the general tendency of the model to overestimate). **Overall, the behavior of the ACF for the observed data is closely reproduced by the model in the ACF for the simulated data.**
+
+The PACF for the observed data very closely resembles the PACF for the simulated data. Both PACFs exhibit a high autocorrelation for the first lag (over .7), which quickly drops, as well as sinusoidally decaying partial autocorrelation values for the lags up until lag 25. Both plots display statistically significant lags until around lag 14 or 15, though these lags are much less significant than the first lag. **Overall, the model reproduces the partial autocorrelation of the observed data fairly effectively, as demonstrated by the similar behavior of the PACFs for the observed and simulated data.** 

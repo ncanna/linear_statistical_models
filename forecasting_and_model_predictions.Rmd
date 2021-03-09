@@ -1,0 +1,368 @@
+---
+title: "Titanic" 
+author: "Navya Annapareddy"
+fontsize: 12pt
+geometry: margin=1in
+urlcolor: black
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, highlight=FALSE)
+#library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+require(dplyr) 
+library(ade4)
+library(lattice) 
+library("GGally")
+library(MASS)
+library(lindia)
+library(readr)
+library(plotly)
+library(gtools)
+library(RColorBrewer)
+library(tseries)
+library(imputeTS)
+library(forecast)
+library(mtsdi)
+library(lubridate)
+
+sourcedir <-"~/Desktop/Fall 2020 Classes/SYS4021/Source" 
+setwd(sourcedir)
+source("AccidentInput.R")
+source("SPM_Panel.R")
+source("PCAplots.R")
+source("FactorPlots.R")
+source("ROC.R")
+source("pc.glm.R")
+source("TestSet.R")
+```
+
+```{r message=FALSE, warning=FALSE}
+setwd("~/Desktop/Fall 2020 Classes/SYS4021/Source")
+titanic = read.csv("titanic.csv",sep=',',header=T)
+titanic$Survived <- as.factor(titanic$Survived)
+titanic$Pclass <- as.factor(titanic$Pclass)
+titanic$Sex <- as.factor(titanic$Sex)
+titanic$Cabin <- as.factor(titanic$Cabin)
+titanic$Embarked <- as.factor(titanic$Embarked)
+titanic$title <- as.factor(titanic$title)
+head(titanic)
+```
+```{r}
+dim(titanic)
+```
+
+```{r}
+table(titanic$Survived)
+```
+
+```{r}
+names(titanic)
+```
+
+```{r}
+ggplot(data=titanic, aes(x=Pclass,fill=factor(Survived)))+geom_bar(stat="count",position="fill")
+```
+```{r}
+ggplot(data=titanic, aes(x=Sex,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+```{r}
+ggplot(data=titanic, aes(x=SibSp,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r}
+ggplot(data=titanic, aes(x=Age, y=Survived)) +
+  geom_bar(stat="identity")
+```
+```{r}
+ggplot(data=titanic, aes(x=Parch,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r}
+ggplot(data=titanic, aes(x=Ticket,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r}
+ggplot(data=titanic, aes(x=Fare,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r}
+ggplot(data=titanic, aes(x=Cabin,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r}
+ggplot(data=titanic, aes(x=Embarked,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r}
+ggplot(data=titanic, aes(x=title,fill=factor(Survived)))+geom_bar(stat = "count",position="fill")
+```
+
+```{r include=FALSE}
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(0, 1, 0, 1))
+    r <- round(abs(cor(x, y, use = "complete.obs")), 2)
+    txt <- format(c(r, 0.123456789), digits=digits)[1]
+    txt <- paste(prefix, txt, sep="")
+    if(missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+    text(0.5, 0.5, txt, cex = 2)
+}
+
+panel.hist <- function(x, ...)
+{
+    usr <- par("usr"); on.exit(par(usr))
+    par(usr = c(usr[1:2], 0, 1.5) )
+    h <- hist(x, plot = FALSE)
+    breaks <- h$breaks; nB <- length(breaks)
+    y <- h$counts; y <- y/max(y)
+    rect(breaks[-nB], 0, breaks[-1], y,
+    col="steelblue2", ...)
+}
+
+
+uva.pairs <- function(vars, ...)
+{
+	args <- list(...)
+	
+	if(is.matrix(vars) | is.data.frame(vars)){
+		if(is.null(args$labels))pairs(vars, lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main)
+		else(pairs(vars, lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main, labels = args$labels))
+		}
+	else(if(is.character(vars)){
+		if(is.null(args$labels))pairs(formula(vars), lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main, data = args$data)
+		else(pairs(formula(vars), lower.panel = panel.smooth, upper.panel = panel.cor, diag.panel = panel.hist, main = args$main, data = args$data, labels = args$labels))} 
+	else(cat("You must enter a matrix, dataframe or formula")))
+	}
+```
+
+```{r}
+names(titanic)
+```
+
+```{r}
+uva.pairs(titanic[,c("Survived", "Pclass", "Sex", "Age", "SibSp", "Parch", "Fare", "Cabin", "Embarked", "title")])
+```
+
+```{r}
+titanic.4 = titanic[,c("Pclass", "Sex", "Fare", "Cabin", "Survived")]
+titanic.glm.main <- glm(Survived~., data = titanic.4, family = binomial)
+summary(titanic.glm.main)
+```
+
+```{r}
+titanic.null <- glm(Survived~1, data = titanic.4, family = binomial)
+anova(titanic.null, titanic.glm.main, test = "Chi")
+```
+
+```{r}
+titanic.5 = titanic[,c("Pclass", "Sex", "Fare", "Age", "Survived")]
+titanic.glm5 <- glm(Survived~., data = titanic.5, family = binomial)
+summary(titanic.glm5)
+```
+
+```{r}
+titanic.null5 <- glm(Survived~1, data = titanic.5, family = binomial)
+anova(titanic.null5, titanic.glm5, test = "Chi")
+```
+
+```{r}
+drop1(titanic.glm5, response~., test = "Chi")
+```
+
+
+```{r}
+titanic5.step <- step(titanic.glm5, data = titanic.5, family = binomial)
+summary(titanic5.step)
+```
+
+```{r}
+((exp(1)^(titanic5.step$coefficients[5])) - 1)*100
+```
+
+-2.7733 = -2.77
+
+```{r}
+titanic.predict <- predict(titanic5.step, type = "response")
+score.table(titanic.predict, titanic$Survived, 0.5)
+```
+
+
+```{r}
+101+81
+```
+
+```{r}
+#FN = 0 
+#1-TPR = FNR = 0 
+#1-TPR = 0 
+#TPR = 1
+#Lowest FPR when TPR = 1
+roc.plot.gg <- plot.roc.gg(titanic.predict, titanic$Survived, "Step")
+roc.plot.gg
+```
+
+# AUTO 
+```{r message=FALSE, warning=FALSE}
+setwd("~/Desktop/Fall 2020 Classes/SYS4021/Source")
+auto = read.csv("auto.csv",sep=',',header=T)
+auto$car <- as.factor(auto$car)
+auto$horsepower <- as.double(auto$horsepower)
+head(auto)
+```
+
+```{r}
+boxplot(auto$mpg, plot=FALSE)$out
+```
+
+```{r}
+boxplot(auto$mpg, plot=FALSE)$stats[5]
+```
+
+```{r, warning=FALSE}
+ggplot(auto, aes(x="", y=mpg)) + 
+  geom_boxplot(width=0.6) +
+  stat_summary(
+    aes(label=sprintf("%1.1f", ..y..)),
+    geom="text", 
+    fun.y = function(y) boxplot.stats(y)$stats,
+    position=position_nudge(x=0.33), 
+    size=3.5) +
+  theme_bw()
+```
+
+```{r}
+names(auto)
+```
+
+```{r}
+uva.pairs(auto[,c("mpg", "cylinders", "displacement", "horsepower", "weight", "acceleration", "year", "origin", "car")])
+```
+
+```{r}
+auto$cylinders <- as.factor(auto$cylinders)
+mpg.main <-lm(mpg~cylinders+weight+displacement,data=auto)
+summary(mpg.main)
+```
+
+-0.0053 = -0.005
+
+```{r}
+contrasts(auto$cylinders)
+```
+
+```{r}
+table(auto$cylinders)
+```
+
+```{r}
+contrasts(auto$cylinders)<-matrix(c(1,0,0,0,0, 0,0,1,0,0, 0,0,0,1,0,  0,0,0,0,1),nrow=5)
+colnames(contrasts(auto$cylinders)) <-matrix(c("3","5","6","8"),ncol=4)
+contrasts(auto$cylinders)
+```
+
+```{r}
+mpg.main.rec <-lm(mpg~cylinders+weight+displacement,data=auto)
+summary(mpg.main.rec)
+```
+
+```{r}
+gg_cooksd(mpg.main.rec, label = TRUE, show.threshold = TRUE,
+          threshold = "convention") +
+  xlab("Obs. Number")+ylab("Cook's distance") +
+  ggtitle("Cook's distance plot")+
+  theme(plot.title = element_text(hjust = 0.5), plot.caption = element_text(hjust = 0.5))
+```
+
+```{r}
+plot(mpg.main.rec,labels.id = NULL)
+```
+
+# GNP TS 
+```{r message=FALSE, warning=FALSE}
+setwd("~/Desktop/Fall 2020 Classes/SYS4021/Source")
+gnp96 <- read.table("gnp96.dat")
+gnp <- ts(gnp96[,2])
+```
+
+```{r}
+time.gnp<-c(1:length(gnp))
+gnp.trend<-lm(log(gnp)~time.gnp)
+summary(gnp.trend)
+```
+
+```{r}
+time.gnp<-c(1:length(gnp))
+gnp.trend<-lm(log(gnp)~time.gnp)
+summary(gnp.trend)
+```
+
+```{r}
+pg.NO2 <- spec.pgram(log(gnp),spans=9,demean=T,log='no', plot=FALSE)
+spec.NO2 <- data.frame(freq=pg.NO2$freq, spec=pg.NO2$spec)
+ggplot(spec.NO2) + geom_line(aes(x=freq,y=spec)) + 
+  ggtitle("Smooth Periodogram of GNP")
+```
+```{r}
+# Find the peak, max.omega.NO2
+max.omega.NO2<-pg.NO2$freq[which(pg.NO2$spec==max(pg.NO2$spec))]
+
+# Where is the peak?
+paste("Peak: ", max.omega.NO2)
+
+# What is the period?
+paste("Period: ", 1/max.omega.NO2)
+
+# What are the periods of the next biggest peaks?
+# Sort spectrum from largest to smallest and find index
+sorted.spec <- sort(pg.NO2$spec, decreasing=T, index.return=T)
+
+# Corresponding periods (omegas = frequencies, Ts = periods)
+sorted.omegas <- pg.NO2$freq[sorted.spec$ix]
+sorted.Ts <- 1/pg.NO2$freq[sorted.spec$ix]
+
+# Look at first 25
+paste("First 25 frequencies (omegas): ")
+sorted.omegas[1:25]
+paste("First 25 periods (Ts): ")
+sorted.Ts[1:25]
+```
+
+```{r}
+ggAcf(log(gnp))
+```
+
+```{r}
+ggAcf(diff(log(gnp)))
+```
+
+
+```{r}
+ggPacf(diff(log(gnp)))
+```
+
+
+```{r}
+temp.auto <- auto.arima(log(gnp),approximation=FALSE)
+summary(temp.auto)
+```
+
+
+```{r}
+AIC(temp.auto)
+```
+
+
+```{r}
+diff.auto <- auto.arima(diff(log(gnp)),approximation=FALSE)
+summary(temp.auto)
+```
+
+
+```{r}
+diff.auto.forecast <- forecast(diff.auto, h=4)
+diff.auto.forecast
+```
